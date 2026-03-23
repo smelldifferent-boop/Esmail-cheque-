@@ -1,0 +1,5 @@
+{
+  "name": "مدير الشيكات - Check Manager",
+  "description": "تطبيق لإدارة الشيكات وتنبيهات مواعيد الاستحقاق - A professional check management app with due date alerts.",
+  "requestFramePermissions": ["notifications"]
+}
