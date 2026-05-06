@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useMemo } from 'react';
-import { PlusCircle, List, CheckCircle2, Trash2, AlertCircle, Bell, Phone, DollarSign, Calendar, Hash, User, X, FileText, Download, Building2, CreditCard, UserCheck, MessageSquare, Image as ImageIcon, Plus, Search } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { PlusCircle, List, CheckCircle2, Trash2, AlertCircle, Bell, Phone, DollarSign, Calendar, Hash, User, X, FileText, Download, Building2, CreditCard, UserCheck, MessageSquare, Image as ImageIcon, Search, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Check, Voucher } from './types';
 import { jsPDF } from 'jspdf';
@@ -130,8 +130,10 @@ const PhoneInput = ({
   }, [value]);
 
   const handlePhoneChange = (newPhone: string) => {
-    setPhoneNumber(newPhone);
-    onChange(countryCode + newPhone);
+    // Validate: only allow digits and basic formatting characters
+    const cleanedPhone = newPhone.replace(/[^0-9\s\-+()]/g, '');
+    setPhoneNumber(cleanedPhone);
+    onChange(countryCode + cleanedPhone);
   };
 
   const handleCodeChange = (newCode: string) => {
@@ -180,6 +182,7 @@ export default function App() {
   
   const [activeTab, setActiveTab] = useState<'add' | 'list'>('add');
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [language, setLanguage] = useState<'ar' | 'en'>(() => {
     const saved = localStorage.getItem('language');
     return (saved as 'ar' | 'en') || 'ar';
@@ -389,13 +392,20 @@ export default function App() {
     return localStorage.getItem('managerPhone') || '';
   });
   
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isExporting, setIsExporting] = useState(false);
+
+  // PWA Event Type
+  interface BeforeInstallPromptEvent extends Event {
+    prompt(): Promise<void>;
+    userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+  }
 
   useEffect(() => {
-    const handleBeforeInstallPrompt = (e: any) => {
+    const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
-      setDeferredPrompt(e);
+      setDeferredPrompt(e as BeforeInstallPromptEvent);
     };
 
     const handleOnline = () => setIsOnline(true);
@@ -420,7 +430,6 @@ export default function App() {
       setDeferredPrompt(null);
     }
   };
-  const [isExporting, setIsExporting] = useState(false);
 
   // Persist manager phone
   useEffect(() => {
@@ -461,7 +470,7 @@ export default function App() {
       localStorage.setItem('checks', JSON.stringify(checks));
     } catch (e) {
       console.error("Error saving checks:", e);
-      showToast('خطأ في حفظ البيانات في الذاكرة المحلية', 'error');
+      showToast(language === 'ar' ? 'خطأ في حفظ البيانات' : 'Error saving data', 'error');
     }
   }, [checks]);
 
@@ -506,9 +515,23 @@ export default function App() {
   }, [checks, notifiedChecks]);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    // Clear existing timeout
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+    toastTimeoutRef.current = setTimeout(() => setToast(null), 3000);
   };
+
+  // Cleanup toast timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const addCheck = () => {
     if (!checkNumber || !payeeName || !amount || !dueDate) {
@@ -593,7 +616,9 @@ export default function App() {
     
     allPhones.forEach(num => {
       const cleanNum = num.replace(/\D/g, '');
-      window.open(`sms:${cleanNum}?body=${encodeURIComponent(message)}`, '_blank');
+      if (cleanNum.length > 0) {
+        window.open(`sms:${cleanNum}?body=${encodeURIComponent(message)}`, '_blank');
+      }
     });
   };
 
@@ -606,12 +631,14 @@ export default function App() {
       return;
     }
     const message = language === 'ar'
-      ? `⏰ *تنبيه من مدير الشيكات*\n\nالشيك رقم: *${check.checkNumber}*\nالمبلغ: *${check.amount} ${check.currency}*\nالمستفيد: *${check.payeeName}*\nتاريخ الاستحقاق: *${check.dueDate}*\n\n_يرجى التأكد من توفر الرصيد في الحساب._`
-      : `⏰ *Check Manager Alert*\n\nCheck Number: *${check.checkNumber}*\nAmount: *${check.amount} ${check.currency}*\nPayee: *${check.payeeName}*\nDue Date: *${check.dueDate}*\n\n_Please ensure funds are available in the account._`;
+      ? `⏰ *تنبيه من مدير الشيكات*\n\nالشيك رقم: *${check.checkNumber}*\nالمبلغ: *${check.amount} ${check.currency}*\nالمستفيد: *${check.payeeName}*\nتاريخ الاستحقاق: *${check.dueDate}*\n\nيرجى التأكد من توفر الرصيد.`
+      : `⏰ *Check Manager Alert*\n\nCheck Number: *${check.checkNumber}*\nAmount: *${check.amount} ${check.currency}*\nPayee: *${check.payeeName}*\nDue Date: *${check.dueDate}*\n\n_Please ensure funds are available._`;
     
     allPhones.forEach(num => {
       const cleanNum = num.replace(/\D/g, '');
-      window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+      if (cleanNum.length > 0) {
+        window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+      }
     });
   };
 
@@ -649,7 +676,9 @@ export default function App() {
             
             check.phoneNumbers.forEach(phone => {
               const cleanNum = phone.replace(/\D/g, '');
-              window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+              if (cleanNum.length > 0) {
+                window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+              }
             });
           }
 
@@ -658,7 +687,9 @@ export default function App() {
               ? `✅ تم صرف الشيك رقم ${check.checkNumber} بمبلغ ${check.amount} ${check.currency}.`
               : `✅ Check #${check.checkNumber} with amount ${check.amount} ${check.currency} has been paid.`;
             const cleanNum = check.representativePhone.replace(/\D/g, '');
-            window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+            if (cleanNum.length > 0) {
+              window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+            }
           }
         } catch (e) {
           console.error("Error creating voucher:", e);
@@ -671,7 +702,6 @@ export default function App() {
   };
 
   const deleteCheck = (id: number) => {
-    // Custom confirm logic could be added here, using simple state for now
     setChecks(prev => prev.filter(c => c.id !== id));
     showToast(language === 'ar' ? 'تم حذف الشيك' : 'Check deleted');
   };
@@ -692,6 +722,10 @@ export default function App() {
         }
       });
       
+      if (!dataUrl) {
+        throw new Error('Failed to generate image');
+      }
+
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
@@ -702,7 +736,6 @@ export default function App() {
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
       
-      // Add title manually to PDF for accessibility if needed, but the image has it
       pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
       pdf.save(`checks_report_${new Date().getTime()}.pdf`);
       showToast(t.successExport);
@@ -716,7 +749,10 @@ export default function App() {
 
   const exportListAsImage = async () => {
     const element = document.getElementById('checks-list-container');
-    if (!element) return;
+    if (!element) {
+      showToast(t.errorExport, 'error');
+      return;
+    }
 
     setIsExporting(true);
     try {
@@ -727,6 +763,10 @@ export default function App() {
         }
       });
       
+      if (!dataUrl) {
+        throw new Error('Failed to generate image');
+      }
+
       const link = document.createElement('a');
       link.download = `checks_report_${new Date().getTime()}.png`;
       link.href = dataUrl;
@@ -742,7 +782,10 @@ export default function App() {
 
   const exportAsImage = async (checkId: number) => {
     const element = document.getElementById(`check-card-${checkId}`);
-    if (!element) return;
+    if (!element) {
+      showToast(t.errorExport, 'error');
+      return;
+    }
 
     setIsExporting(true);
     try {
@@ -754,6 +797,10 @@ export default function App() {
         }
       });
       
+      if (!dataUrl) {
+        throw new Error('Failed to generate image');
+      }
+
       const link = document.createElement('a');
       link.download = `check-${checkId}.png`;
       link.href = dataUrl;
@@ -771,33 +818,39 @@ export default function App() {
     if (!check.representativePhone) return;
     
     const message = language === 'ar'
-      ? `⏰ *تنبيه للمندوب*\n\nتمت إضافة شيك جديد للمتابعة:\nرقم الشيك: *${check.checkNumber}*\nالمبلغ: *${check.amount} ${check.currency}*\nالمستفيد: *${check.payeeName}*\nتاريخ الاستحقاق: *${check.dueDate}*\n\n_الشيك حالياً في قائمة الانتظار._`
-      : `⏰ *Representative Notification*\n\nNew check added for follow-up:\nCheck Number: *${check.checkNumber}*\nAmount: *${check.amount} ${check.currency}*\nPayee: *${check.payeeName}*\nDue Date: *${check.dueDate}*\n\n_Check is currently in the waiting list._`;
+      ? `⏰ *تنبيه للمندوب*\n\nتمت إضافة شيك جديد للمتابعة:\nرقم الشيك: *${check.checkNumber}*\nالمبلغ: *${check.amount} ${check.currency}*\nالمستفيد: *${check.payeeName}*\nتاريخ الاستحقاق: *${check.dueDate}*`
+      : `⏰ *Representative Notification*\n\nNew check added for follow-up:\nCheck Number: *${check.checkNumber}*\nAmount: *${check.amount} ${check.currency}*\nPayee: *${check.payeeName}*\nDue Date: *${check.dueDate}*`;
     
     const cleanNum = check.representativePhone.replace(/\D/g, '');
-    window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+    if (cleanNum.length > 0) {
+      window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+    }
   };
 
   const notifyManager = (check: Check) => {
     if (!managerPhone) return;
     
     const message = language === 'ar'
-      ? `🔔 *تنبيه للمدير*\n\nتمت إضافة شيك جديد:\nرقم الشيك: *${check.checkNumber}*\nالمبلغ: *${check.amount} ${check.currency}*\nالمستفيد: *${check.payeeName}*\nتاريخ الاستحقاق: *${check.dueDate}*\n\n_يرجى المتابعة._`
-      : `🔔 *Manager Notification*\n\nNew check added:\nCheck Number: *${check.checkNumber}*\nAmount: *${check.amount} ${check.currency}*\nPayee: *${check.payeeName}*\nDue Date: *${check.dueDate}*\n\n_Please follow up._`;
+      ? `🔔 *تنبيه للمدير*\n\nتمت إضافة شيك جديد:\nرقم الشيك: *${check.checkNumber}*\nالمبلغ: *${check.amount} ${check.currency}*\nالمستفيد: *${check.payeeName}*\nتاريخ الاستحقاق: *${check.dueDate}*`
+      : `🔔 *Manager Notification*\n\nNew check added:\nCheck Number: *${check.checkNumber}*\nAmount: *${check.amount} ${check.currency}*\nPayee: *${check.payeeName}*\nDue Date: *${check.dueDate}*`;
     
     const cleanNum = managerPhone.replace(/\D/g, '');
-    window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+    if (cleanNum.length > 0) {
+      window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+    }
   };
 
   const notifyDrawer = (check: Check) => {
     if (!check.drawerPhone) return;
     
     const message = language === 'ar'
-      ? `🔔 *تنبيه للساحب*\n\nتمت إضافة شيك جديد باسمك:\nرقم الشيك: *${check.checkNumber}*\nالمبلغ: *${check.amount} ${check.currency}*\nالمستفيد: *${check.payeeName}*\nتاريخ الاستحقاق: *${check.dueDate}*\n\n_يرجى التأكد من توفر الرصيد._`
-      : `🔔 *Drawer Notification*\n\nNew check added in your name:\nCheck Number: *${check.checkNumber}*\nAmount: *${check.amount} ${check.currency}*\nPayee: *${check.payeeName}*\nDue Date: *${check.dueDate}*\n\n_Please ensure funds are available._`;
+      ? `🔔 *تنبيه للساحب*\n\nتمت إضافة شيك جديد باسمك:\nرقم الشيك: *${check.checkNumber}*\nالمبلغ: *${check.amount} ${check.currency}*\nالمستفيد: *${check.payeeName}*\nتاريخ الاستحقاق: *${check.dueDate}*`
+      : `🔔 *Drawer Notification*\n\nNew check added in your name:\nCheck Number: *${check.checkNumber}*\nAmount: *${check.amount} ${check.currency}*\nPayee: *${check.payeeName}*\nDue Date: *${check.dueDate}*`;
     
     const cleanNum = check.drawerPhone.replace(/\D/g, '');
-    window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+    if (cleanNum.length > 0) {
+      window.open(`https://wa.me/${cleanNum}?text=${encodeURIComponent(message)}`, '_blank');
+    }
   };
 
   const checkStatus = (check: Check) => {
@@ -806,6 +859,7 @@ export default function App() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const due = new Date(check.dueDate);
+    due.setHours(0, 0, 0, 0);
     const diffTime = due.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     
@@ -856,7 +910,7 @@ export default function App() {
       }
       return sortOrder === 'asc' ? comparison : -comparison;
     });
-  }, [checks, sortBy, sortOrder, filterStatus]);
+  }, [checks, sortBy, sortOrder, filterStatus, searchQuery]);
 
   return (
     <div className={`min-h-screen bg-slate-50 py-8 px-4 font-['Cairo'] ${language === 'en' ? 'font-sans' : ''}`} dir={language === 'ar' ? 'rtl' : 'ltr'}>
@@ -1230,14 +1284,15 @@ export default function App() {
                       <button 
                         onClick={exportListAsImage}
                         disabled={isExporting}
-                        className="flex items-center gap-1 text-xs font-bold bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-all border border-blue-200"
+                        className="flex items-center gap-1 text-xs font-bold bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-all border border-blue-200 disabled:opacity-50"
                       >
                         <ImageIcon size={14} />
                         {t.exportImage}
                       </button>
                       <button 
                         onClick={exportToPDF}
-                        className="flex items-center gap-1 text-xs font-bold bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg hover:bg-emerald-100 transition-all border border-emerald-200"
+                        disabled={isExporting}
+                        className="flex items-center gap-1 text-xs font-bold bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg hover:bg-emerald-100 transition-all border border-emerald-200 disabled:opacity-50"
                       >
                         <Download size={14} />
                         {t.exportPDF}
@@ -1345,7 +1400,7 @@ export default function App() {
                               <button
                                 onClick={() => exportAsImage(check.id)}
                                 disabled={isExporting}
-                                className="flex items-center gap-1 text-[10px] font-bold bg-slate-50 text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-100 transition-all border border-slate-200"
+                                className="flex items-center gap-1 text-[10px] font-bold bg-slate-50 text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-100 transition-all border border-slate-200 disabled:opacity-50"
                               >
                                 <ImageIcon size={12} />
                                 {t.exportImage}
